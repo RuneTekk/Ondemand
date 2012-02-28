@@ -32,17 +32,17 @@ public final class Client {
     /**
      * The priority requests for this client.
      */
-    long[] priorityRequests;
+    int[] priorityRequests;
     
     /**
      * The urgent requests for this client.
      */
-    long[] urgentRequests;
+    int[] urgentRequests;
     
     /**
      * The passive requests for this client.
      */
-    long[] passiveRequests;
+    int[] passiveRequests;
     
     /**
      * The {@link InputStream} of this client.
@@ -74,8 +74,8 @@ public final class Client {
     public Client(Socket socket) throws IOException {
         this.inputStream = socket.getInputStream();
         this.outputStream = socket.getOutputStream();
-        priorityRequests = new long[QUEUE_SIZE + 2];
-        urgentRequests = new long[QUEUE_SIZE + 2];
-        passiveRequests = new long[QUEUE_SIZE + 2];
+        priorityRequests = new int[QUEUE_SIZE + 3];
+        urgentRequests = new int[QUEUE_SIZE + 3];
+        passiveRequests = new int[QUEUE_SIZE + 3];
     }  
 }
