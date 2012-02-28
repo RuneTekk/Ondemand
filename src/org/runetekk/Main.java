@@ -153,20 +153,15 @@ public final class Main implements Runnable {
                                     throw new IOException("EOF");
                             }
                             for(int off = 0; off < requestBuffer.length;) {
-                                long hash = ((requestBuffer[off++] & 0xFF) << 24L) |
-                                           ((requestBuffer[off++] & 0xFF) << 16L) |
-                                           ((requestBuffer[off++] & 0xFF) << 8L) |
+                                int hash = ((requestBuffer[off++] & 0xFF) << 24) |
+                                           ((requestBuffer[off++] & 0xFF) << 16) |
+                                           ((requestBuffer[off++] & 0xFF) << 8) |
                                             (requestBuffer[off++] & 0xFF);
-                                int archiveId = (int) (hash & 0xFFFF00) >> 8;
-                                int indexId = (int) (hash & 0xFF000000) >> 24;
-                                if(archiveBuffers.length > indexId && indexId >= 0 && archiveBuffers[indexId].length > archiveId && archiveId >= 0 && archiveBuffers[indexId][archiveId] != null) {
-                                    hash |= (long) (archiveBuffers[indexId][archiveId].getPayload().length & 0xFFFF) << 32L;
-                                } 
-                                long[] queue = (hash & 0xFFL) == 2 ? client.urgentRequests : 
+                                int[] queue = (hash & 0xFFL) == 2 ? client.urgentRequests : 
                                                (hash & 0xFFL) == 1 ? client.priorityRequests 
                                                                  : client.passiveRequests;
-                                int writePosition = (int) queue[queue.length - 1];
-                                queue[queue.length - 1] = (queue[queue.length - 1] + 1L) % Client.QUEUE_SIZE;
+                                int writePosition = queue[queue.length - 1];
+                                queue[queue.length - 1] = (queue[queue.length - 1] + 1) % Client.QUEUE_SIZE;
                                 if(queue[queue.length - 1] == queue[queue.length - 2]) {
                                     LOGGER.log(Level.WARNING, "Client disconnected : Queue overfill!");
                                     client.destroy();
@@ -175,17 +170,17 @@ public final class Main implements Runnable {
                                 queue[writePosition] = hash;
                             }
                         }
-                        long[] queue = null;
+                        int[] queue = null;
                         int position = -1;
                         if(client.urgentRequests[client.urgentRequests.length - 1] != 
                            client.urgentRequests[client.urgentRequests.length - 2]) {
-                            position = (int) client.urgentRequests[client.urgentRequests.length - 2];                          
+                            position = client.urgentRequests[client.urgentRequests.length - 2];                          
                             queue = client.urgentRequests;
                         }   
                         if(position == -1) {
                             if(client.priorityRequests[client.priorityRequests.length - 1] != 
                                client.priorityRequests[client.priorityRequests.length - 2]) {
-                                position = (int) client.priorityRequests[client.priorityRequests.length - 2];                               
+                                position = client.priorityRequests[client.priorityRequests.length - 2];                               
                                 queue = client.priorityRequests;
                             }  
                         }
@@ -198,11 +193,14 @@ public final class Main implements Runnable {
                         }
                         if(queue != null) {
                             client.clientTimeout = -1L;
-                            long hash = queue[position];
-                            int archiveId = (int) (hash & 0xFFFF00) >> 8;
-                            int indexId = (int) (hash & 0xFF000000) >> 24;
-                            int size = (int) ((hash & 0xFFFF00000000L) >> 32L);
-                            int block = (int) ((hash & 0xFF000000000000L) >> 48L);
+                            int hash = queue[position];
+                            int archiveId = (hash & 0xFFFF00) >> 8;
+                            int indexId = (hash & 0xFF000000) >> 24;
+                            if(queue[queue.length - 3] == 0 && archiveBuffers.length > indexId && indexId >= 0 && archiveBuffers[indexId].length > archiveId && archiveId >= 0 && archiveBuffers[indexId][archiveId] != null) {
+                                queue[queue.length - 3] =  (archiveBuffers[indexId][archiveId].getCapacity() & 0xFFFF) << 8;
+                            }
+                            int size = (queue[queue.length - 3] & 0xFFFF00) >> 8;
+                            int block = queue[queue.length - 3] & 0xFF;
                             byte[] header = { (byte) indexId, 
                                               (byte) (archiveId >> 8), 
                                               (byte) (archiveId & 0xFF),
@@ -220,8 +218,9 @@ public final class Main implements Runnable {
                            }
                            if(write < BLOCK_SIZE) {
                                queue[queue.length - 2] = (queue[queue.length - 2] + 1) % Client.QUEUE_SIZE;
+                               queue[queue.length - 3] = 0;
                            } else
-                               queue[position] = (hash & ~0xFF000000000000L) | ((long) (block + 1) << 48L);               
+                               queue[queue.length - 3] = (queue[queue.length - 3] & ~0xFF) | (block + 1);               
                         } else {
                             if(client.clientTimeout < 0L)
                                 client.clientTimeout = System.currentTimeMillis() + 5000L;
