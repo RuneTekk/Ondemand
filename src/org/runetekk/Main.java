@@ -95,143 +95,145 @@ public final class Main implements Runnable {
     @Override
     public void run() {
         for(;;) {
-            if(isPaused)
-                break;
-            Client client = null;
-            try {
-                 Socket socket = serverSocket.accept();
-                 client = new Client(socket);
-            } catch(IOException ex) {
-                if(!(ex instanceof SocketTimeoutException))
-                    destroy();
-            }     
-            if(client != null) {   
-                client.clientTimeout = System.currentTimeMillis() + 5000L;
-                synchronized(clientQueue) {
-                    clientQueue.add(client);
-                }
-            }   
-            Client firstClient = null;
-            clientloop:
-            for(int i = 0; i < 10; i++) {
-                client = clientQueue.poll();
-                if(client == null)
+            synchronized(this) {
+                if(isPaused)
                     break;
-                if(firstClient == null)
-                    firstClient = client;
-                else if(firstClient != client) {
-                    clientQueue.addLast(client);
-                    break;
-                }
-                if(client.clientTimeout > 0L && client.clientTimeout < System.currentTimeMillis()) {
-                    LOGGER.log(Level.WARNING, "Client disconnected : Timeout!");
-                    client.destroy();
-                    continue;
-                }
+                Client client = null;
                 try {
-                    int avail = client.inputStream.available();
-                    if(!client.handshakeHandled) {
-                        if(avail >= 1) {
-                            if(client.inputStream.read() == 15) {
-                                client.outputStream.write(new byte[8]);
-                                client.outputStream.flush();
-                                client.handshakeHandled = true;
-                                client.clientTimeout = -1L;
-                            } else {
-                                LOGGER.log(Level.WARNING, "Client disconnected : Invalid OP!");
-                                client.destroy();
-                                continue;
-                            }  
-                        }
-                    } else {
-                        if(avail > REQUEST_SIZE) {
-                            byte[] requestBuffer = new byte[avail - (avail % REQUEST_SIZE)];
-                            int read;
-                            for(int off = 0; off < avail; off += read) {
-                                read = client.inputStream.read(requestBuffer, 0, requestBuffer.length - off);
-                                if(read < 0)
-                                    throw new IOException("EOF");
-                            }
-                            for(int off = 0; off < requestBuffer.length;) {
-                                int hash = ((requestBuffer[off++] & 0xFF) << 24) |
-                                           ((requestBuffer[off++] & 0xFF) << 16) |
-                                           ((requestBuffer[off++] & 0xFF) << 8) |
-                                            (requestBuffer[off++] & 0xFF);
-                                int[] queue = (hash & 0xFFL) == 2 ? client.urgentRequests : 
-                                               (hash & 0xFFL) == 1 ? client.priorityRequests 
-                                                                 : client.passiveRequests;
-                                int writePosition = queue[queue.length - 1];
-                                queue[queue.length - 1] = (queue[queue.length - 1] + 1) % Client.QUEUE_SIZE;
-                                if(queue[queue.length - 1] == queue[queue.length - 2]) {
-                                    LOGGER.log(Level.WARNING, "Client disconnected : Queue overfill!");
+                     Socket socket = serverSocket.accept();
+                     client = new Client(socket);
+                } catch(IOException ex) {
+                    if(!(ex instanceof SocketTimeoutException))
+                        destroy();
+                }     
+                if(client != null) {   
+                    client.clientTimeout = System.currentTimeMillis() + 5000L;
+                    synchronized(clientQueue) {
+                        clientQueue.add(client);
+                    }
+                }   
+                Client firstClient = null;
+                clientloop:
+                for(int i = 0; i < 10; i++) {
+                    client = clientQueue.poll();
+                    if(client == null)
+                        break;
+                    if(firstClient == null)
+                        firstClient = client;
+                    else if(firstClient != client) {
+                        clientQueue.addLast(client);
+                        break;
+                    }
+                    if(client.clientTimeout > 0L && client.clientTimeout < System.currentTimeMillis()) {
+                        LOGGER.log(Level.FINE, "Client disconnected : Timeout!");
+                        client.destroy();
+                        continue;
+                    }
+                    try {
+                        int avail = client.inputStream.available();
+                        if(!client.handshakeHandled) {
+                            if(avail >= 1) {
+                                if(client.inputStream.read() == 15) {
+                                    client.outputStream.write(new byte[8]);
+                                    client.outputStream.flush();
+                                    client.handshakeHandled = true;
+                                    client.clientTimeout = -1L;
+                                } else {
+                                    LOGGER.log(Level.WARNING, "Client disconnected : Invalid OP!");
                                     client.destroy();
-                                    continue clientloop;
-                                }
-                                queue[writePosition] = hash;
+                                    continue;
+                                }  
                             }
-                        }
-                        int[] queue = null;
-                        int position = -1;
-                        if(client.urgentRequests[client.urgentRequests.length - 1] != 
-                           client.urgentRequests[client.urgentRequests.length - 2]) {
-                            position = client.urgentRequests[client.urgentRequests.length - 2];                          
-                            queue = client.urgentRequests;
-                        }   
-                        if(position == -1) {
-                            if(client.priorityRequests[client.priorityRequests.length - 1] != 
-                               client.priorityRequests[client.priorityRequests.length - 2]) {
-                                position = client.priorityRequests[client.priorityRequests.length - 2];                               
-                                queue = client.priorityRequests;
-                            }  
-                        }
-                        if(position == -1) {
-                            if(client.passiveRequests[client.passiveRequests.length - 1] != 
-                               client.passiveRequests[client.passiveRequests.length - 2]) {
-                                position = (int) client.passiveRequests[client.passiveRequests.length - 2];                               
-                                queue = client.passiveRequests;
-                            } 
-                        }
-                        if(queue != null) {
-                            client.clientTimeout = -1L;
-                            int hash = queue[position];
-                            int archiveId = (hash & 0xFFFF00) >> 8;
-                            int indexId = (hash & 0xFF000000) >> 24;
-                            if(queue[queue.length - 3] == 0 && archiveBuffers.length > indexId && indexId >= 0 && archiveBuffers[indexId].length > archiveId && archiveId >= 0 && archiveBuffers[indexId][archiveId] != null) {
-                                queue[queue.length - 3] =  (archiveBuffers[indexId][archiveId].getCapacity() & 0xFFFF) << 8;
-                            }
-                            int size = (queue[queue.length - 3] & 0xFFFF00) >> 8;
-                            int block = queue[queue.length - 3] & 0xFF;
-                            byte[] header = { (byte) indexId, 
-                                              (byte) (archiveId >> 8), 
-                                              (byte) (archiveId & 0xFF),
-                                              (byte) (size >> 8),
-                                              (byte) (size & 0xFF),
-                                              (byte) (block & 0xFF)
-                                            };
-                           client.outputStream.write(header);
-                           int write = size - (block * BLOCK_SIZE); 
-                           if(write > BLOCK_SIZE)
-                               write = BLOCK_SIZE;
-                           if(write > 0) {
-                               client.outputStream.write(archiveBuffers[indexId][archiveId].get(BLOCK_SIZE * block, write), 0, write);
-                               client.outputStream.flush();
-                           }
-                           if(write < BLOCK_SIZE) {
-                               queue[queue.length - 2] = (queue[queue.length - 2] + 1) % Client.QUEUE_SIZE;
-                               queue[queue.length - 3] = 0;
-                           } else
-                               queue[queue.length - 3] = (queue[queue.length - 3] & ~0xFF) | (block + 1);               
                         } else {
-                            if(client.clientTimeout < 0L)
-                                client.clientTimeout = System.currentTimeMillis() + 5000L;
-                        }
-                    }         
-                } catch(IOException ioex) {
-                    LOGGER.log(Level.WARNING, "Error - ", ioex);
-                    client.destroy();
-                    continue;
+                            if(avail > REQUEST_SIZE) {
+                                byte[] requestBuffer = new byte[avail - (avail % REQUEST_SIZE)];
+                                int read;
+                                for(int off = 0; off < avail; off += read) {
+                                    read = client.inputStream.read(requestBuffer, 0, requestBuffer.length - off);
+                                    if(read < 0)
+                                        throw new IOException("EOF");
+                                }
+                                for(int off = 0; off < requestBuffer.length;) {
+                                    int hash = ((requestBuffer[off++] & 0xFF) << 24) |
+                                               ((requestBuffer[off++] & 0xFF) << 16) |
+                                               ((requestBuffer[off++] & 0xFF) << 8) |
+                                                (requestBuffer[off++] & 0xFF);
+                                    int[] queue = (hash & 0xFFL) == 2 ? client.urgentRequests : 
+                                                   (hash & 0xFFL) == 1 ? client.priorityRequests 
+                                                                     : client.passiveRequests;
+                                    int writePosition = queue[queue.length - 1];
+                                    queue[queue.length - 1] = (queue[queue.length - 1] + 1) % Client.QUEUE_SIZE;
+                                    if(queue[queue.length - 1] == queue[queue.length - 2]) {
+                                        LOGGER.log(Level.WARNING, "Client disconnected : Queue overfill!");
+                                        client.destroy();
+                                        continue clientloop;
+                                    }
+                                    queue[writePosition] = hash;
+                                }
+                            }
+                            int[] queue = null;
+                            int position = -1;
+                            if(client.urgentRequests[client.urgentRequests.length - 1] != 
+                               client.urgentRequests[client.urgentRequests.length - 2]) {
+                                position = client.urgentRequests[client.urgentRequests.length - 2];                          
+                                queue = client.urgentRequests;
+                            }   
+                            if(position == -1) {
+                                if(client.priorityRequests[client.priorityRequests.length - 1] != 
+                                   client.priorityRequests[client.priorityRequests.length - 2]) {
+                                    position = client.priorityRequests[client.priorityRequests.length - 2];                               
+                                    queue = client.priorityRequests;
+                                }  
+                            }
+                            if(position == -1) {
+                                if(client.passiveRequests[client.passiveRequests.length - 1] != 
+                                   client.passiveRequests[client.passiveRequests.length - 2]) {
+                                    position = (int) client.passiveRequests[client.passiveRequests.length - 2];                               
+                                    queue = client.passiveRequests;
+                                } 
+                            }
+                            if(queue != null) {
+                                client.clientTimeout = -1L;
+                                int hash = queue[position];
+                                int archiveId = (hash & 0xFFFF00) >> 8;
+                                int indexId = (hash & 0xFF000000) >> 24;
+                                if(queue[queue.length - 3] == 0 && archiveBuffers.length > indexId && indexId >= 0 && archiveBuffers[indexId].length > archiveId && archiveId >= 0 && archiveBuffers[indexId][archiveId] != null) {
+                                    queue[queue.length - 3] =  (archiveBuffers[indexId][archiveId].getCapacity() & 0xFFFF) << 8;
+                                }
+                                int size = (queue[queue.length - 3] & 0xFFFF00) >> 8;
+                                int block = queue[queue.length - 3] & 0xFF;
+                                byte[] header = { (byte) indexId, 
+                                                  (byte) (archiveId >> 8), 
+                                                  (byte) (archiveId & 0xFF),
+                                                  (byte) (size >> 8),
+                                                  (byte) (size & 0xFF),
+                                                  (byte) (block & 0xFF)
+                                                };
+                               client.outputStream.write(header);
+                               int write = size - (block * BLOCK_SIZE); 
+                               if(write > BLOCK_SIZE)
+                                   write = BLOCK_SIZE;
+                               if(write > 0) {
+                                   client.outputStream.write(archiveBuffers[indexId][archiveId].get(BLOCK_SIZE * block, write), 0, write);
+                                   client.outputStream.flush();
+                               }
+                               if(write < BLOCK_SIZE) {
+                                   queue[queue.length - 2] = (queue[queue.length - 2] + 1) % Client.QUEUE_SIZE;
+                                   queue[queue.length - 3] = 0;
+                               } else
+                                   queue[queue.length - 3] = (queue[queue.length - 3] & ~0xFF) | (block + 1);               
+                            } else {
+                                if(client.clientTimeout < 0L)
+                                    client.clientTimeout = System.currentTimeMillis() + 5000L;
+                            }
+                        }         
+                    } catch(IOException ioex) {
+                        LOGGER.log(Level.WARNING, "Error - ", ioex);
+                        client.destroy();
+                        continue;
+                    }
+                    clientQueue.addLast(client);
                 }
-                clientQueue.addLast(client);
             }
         }
     }
